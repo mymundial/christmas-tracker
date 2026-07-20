@@ -7,37 +7,112 @@ A runnable Expo/React Native prototype for the six-location outdoor circuit arou
 
 ## What the prototype does
 
-- Runs on iPhone and Android from one React Native codebase.
+- Runs on iPhone, Android, and the web from one React Native codebase.
 - Requests foreground precise-location access only.
-- Displays a fictional Christmas-themed radar.
+- Displays a fictional Christmas-themed radar with a continuous sweep.
 - Activates checkpoints strictly in this order: `1 → 2 → 3 → 4 → 5 → 6`.
 - Contains no extra or non-activating wayfinding points between Locations 4 and 5.
 - Shows the next checkpoint as a radar dot only inside the 10 m reveal radius.
 - Unlocks after remaining inside the 10 m zone for approximately two seconds with acceptable GPS accuracy.
 - Displays a popup without replacing the radar screen.
-- Saves progress on the phone.
+- Saves progress on the device/browser.
+
+## Install dependencies
+
+From the project folder:
+
+```bash
+npm install
+```
+
+## Preview in VS Code
+
+Start the browser version:
+
+```bash
+npm run web
+```
+
+Or start Expo and press `w`:
+
+```bash
+npx expo start
+```
+
+The source HTML template is:
+
+```text
+public/index.html
+```
+
+Expo injects the compiled application into `<div id="root"></div>` when it starts or exports the web app.
+
+## Create the production website
+
+```bash
+npm run build:web
+```
+
+The deployable website is generated in:
+
+```text
+dist/
+  index.html
+  _expo/
+```
+
+Test the production export locally with:
+
+```bash
+npm run serve:web
+```
+
+## Vercel blank-screen fix
+
+The Vercel configuration deliberately has no catch-all rewrite. Expo's generated JavaScript lives under `/_expo/`; rewriting every request to `/` causes those JavaScript files to return HTML and leaves the page looking black.
+
+After replacing an older deployment, force a fresh build with:
+
+```bash
+rm -rf dist .expo
+npm install
+npm run build:web
+npx vercel@latest --prod --force
+```
+
+## Deploy to Vercel
+
+The included `vercel.json` tells Vercel to build the Expo web app and serve `dist`.
+
+### Git deployment
+
+Push the whole source project to GitHub/GitLab/Bitbucket, import that repository into Vercel, and deploy. Do not upload the original source ZIP as a static file.
+
+### Vercel CLI
+
+```bash
+npx vercel@latest
+```
+
+Vercel will run `npm run build:web`, generate `dist/index.html`, and publish the result.
+
+### Manual static upload
+
+Run `npm run build:web`, then upload the contents of `dist`, not the source folder or ZIP.
+
+Browser location access requires HTTPS in production. Vercel provides HTTPS automatically.
 
 ## Run it on an iPhone or Android phone
 
-This project deliberately uses Expo SDK 54 so it can be tested in the current Expo Go app on a physical phone.
-
-1. Install Node.js 20 or newer.
-2. From this folder, install dependencies:
-
-   ```bash
-   npm install
-   ```
-
-3. Install **Expo Go** from the iOS App Store or Google Play.
-4. Start the project:
+1. Install **Expo Go** from the iOS App Store or Google Play.
+2. Start the project:
 
    ```bash
    npx expo start
    ```
 
-5. Keep the computer and phone on the same Wi-Fi network.
-6. Scan the QR code using the iPhone Camera app or Expo Go on Android.
-7. Grant precise location access while using the app.
+3. Scan the QR code using the iPhone Camera app or Expo Go on Android.
+4. Grant precise location access while using the app.
 
 For an outdoor test, keep the app open and walk the route in order. The app is foreground-only and does not track in the background.
 
@@ -78,7 +153,7 @@ DWELL_TIME_MS = 2000
 MAX_ACCEPTABLE_ACCURACY_METRES = 30
 ```
 
-Because GPS can drift near buildings, test every checkpoint on the intended iPhone before the live demo. Increase the radii only if the real device repeatedly fails to enter the 10 m zone.
+Because GPS can drift near buildings, test every checkpoint on the intended iPhone before the live demo.
 
 ## Useful checks
 
@@ -88,15 +163,14 @@ npm run verify-route
 npx expo-doctor@latest
 ```
 
-## Installable builds
+## Installable native builds
 
-Expo Go is the quickest prototype test. For a standalone install, create an Expo account and use EAS Build:
+Use `npx eas-cli@latest` so a global installation is not required:
 
 ```bash
-npm install --global eas-cli
-eas login
-eas build --profile preview --platform android
-eas build --profile preview --platform ios
+npx eas-cli@latest login
+npx eas-cli@latest build --profile preview --platform android
+npx eas-cli@latest build --profile preview --platform ios
 ```
 
 An Apple Developer account and registered test-device provisioning may be required for an internally distributed iPhone build.

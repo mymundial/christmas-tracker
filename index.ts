@@ -1,8 +1,15 @@
-import { registerRootComponent } from 'expo';
+import { registerRootComponent } from "expo";
+import React from "react";
 
-import App from './App';
+import App from "./App";
+import { AppErrorBoundary } from "./src/components/AppErrorBoundary";
 
-// registerRootComponent calls AppRegistry.registerComponent('main', () => App);
-// It also ensures that whether you load the app in Expo Go or in a native build,
-// the environment is set up appropriately
-registerRootComponent(App);
+function Root() {
+  return React.createElement(
+    AppErrorBoundary,
+    null,
+    React.createElement(App),
+  );
+}
+
+registerRootComponent(Root);

@@ -34,7 +34,15 @@
       ]
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "bundler": "metro",
+      "output": "single",
+      "favicon": "./assets/favicon.png",
+      "name": "CHRISTMAS TRACKER",
+      "shortName": "XMAS TRACKER",
+      "lang": "en-GB",
+      "themeColor": "#03110D",
+      "backgroundColor": "#03110D",
+      "description": "A Christmas-themed GPS radar prototype for the ADI HQ outdoor checkpoint circuit."
     },
     "plugins": [
       [

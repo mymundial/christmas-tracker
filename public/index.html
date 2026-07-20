@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="%LANG_ISO_CODE%">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#03110D" />
+    <meta
+      name="description"
+      content="A Christmas-themed GPS radar prototype for the ADI HQ outdoor checkpoint circuit."
+    />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="XMAS TRACKER" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <title>%WEB_TITLE%</title>
+    <style id="expo-reset">
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: #03110d;
+      }
+
+      #root {
+        display: flex;
+        width: 100%;
+        height: 100%;
+        flex: 1;
+      }
+
+      #boot-message {
+        box-sizing: border-box;
+        display: flex;
+        width: 100%;
+        height: 100%;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        color: #aeffd1;
+        background: radial-gradient(circle at center, #08261b 0%, #020807 72%);
+        font: 800 12px/1.5 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        letter-spacing: 0.14em;
+        text-align: center;
+      }
+    </style>
+    <script>
+      window.addEventListener("error", function (event) {
+        var boot = document.getElementById("boot-message");
+        if (boot) {
+          boot.textContent = "THE WEB APP FAILED TO START. CHECK THE BROWSER CONSOLE OR REDEPLOY THE LATEST BUILD.";
+          boot.style.color = "#ffb2c0";
+        }
+      });
+    </script>
+  </head>
+  <body>
+    <noscript>JavaScript is required to run CHRISTMAS TRACKER.</noscript>
+    <div id="root">
+      <div id="boot-message">STARTING CHRISTMAS RADAR…</div>
+    </div>
+  </body>
+</html>
