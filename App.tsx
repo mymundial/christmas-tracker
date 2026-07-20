@@ -808,7 +808,7 @@ export default function App() {
           <Text style={styles.instructionText}>
             {complete
               ? "Circuit complete. Reset the route to run another demo."
-              : "Follow the planned clockwise route. The next checkpoint appears only when you are within 10 metres."}
+              : `Follow the planned clockwise route. The next checkpoint appears within ${REVEAL_RADIUS_METRES} metres and unlocks within ${UNLOCK_RADIUS_METRES} metres.`}
           </Text>
           <View style={styles.metricsRow}>
             <View style={styles.metric}>
@@ -824,9 +824,9 @@ export default function App() {
             </View>
             <View style={styles.metricDivider} />
             <View style={styles.metric}>
-              <Text style={styles.metricLabel}>RADAR</Text>
+              <Text style={styles.metricLabel}>DISTANCE</Text>
               <Text style={styles.metricValue}>
-                {heading === null ? "NORTH" : "HEADING"}
+                {distance === null ? "--" : `${Math.round(distance)} M`}
               </Text>
             </View>
           </View>

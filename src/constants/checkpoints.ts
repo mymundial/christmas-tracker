@@ -45,7 +45,7 @@ export const CHECKPOINTS: Checkpoint[] = [
 ];
 
 // Product rules. Keep these in one place so on-site tuning is quick.
-export const REVEAL_RADIUS_METRES = 10;
+export const REVEAL_RADIUS_METRES = 35;
 export const UNLOCK_RADIUS_METRES = 10;
 export const DWELL_TIME_MS = 2_000;
 export const MAX_ACCEPTABLE_ACCURACY_METRES = 30;
