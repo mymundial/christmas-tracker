@@ -32,7 +32,7 @@ import { bearingDegrees, distanceMetres } from "./src/utils/geo";
 type PermissionState = "checking" | "granted" | "denied" | "unavailable";
 type LocationState = "idle" | "acquiring" | "tracking" | "timed-out" | "error" | "demo";
 
-const GPS_TIMEOUT_MS = 12_000;
+const GPS_TIMEOUT_MS = 18_000;
 
 const snowflakes = [
   { left: "7%", top: "12%", size: 12, opacity: 0.35 },
@@ -50,7 +50,35 @@ function locationErrorMessage(error: unknown): string {
   if (typeof error === "string") {
     return error;
   }
-  return "The browser or device did not return a location.";
+  return "The device did not return a location.";
+}
+
+function browserPositionToExpo(position: GeolocationPosition): Location.LocationObject {
+  return {
+    timestamp: position.timestamp,
+    coords: {
+      latitude: position.coords.latitude,
+      longitude: position.coords.longitude,
+      altitude: position.coords.altitude,
+      accuracy: position.coords.accuracy,
+      altitudeAccuracy: position.coords.altitudeAccuracy,
+      heading: position.coords.heading,
+      speed: position.coords.speed,
+    },
+  };
+}
+
+function browserLocationError(error: GeolocationPositionError): string {
+  switch (error.code) {
+    case error.PERMISSION_DENIED:
+      return "Location permission is blocked for this website.";
+    case error.POSITION_UNAVAILABLE:
+      return "A location fix is not currently available.";
+    case error.TIMEOUT:
+      return "The location request timed out.";
+    default:
+      return error.message || "The browser did not return a location.";
+  }
 }
 
 export default function App() {
@@ -60,6 +88,7 @@ export default function App() {
   const [permissionState, setPermissionState] = useState<PermissionState>("checking");
   const [locationState, setLocationState] = useState<LocationState>("idle");
   const [locationError, setLocationError] = useState<string | null>(null);
+  const [locationAttempt, setLocationAttempt] = useState(0);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [progressLoaded, setProgressLoaded] = useState(false);
   const [position, setPosition] = useState<Location.LocationObject | null>(null);
@@ -97,18 +126,44 @@ export default function App() {
     setPermissionState("checking");
     setLocationState("acquiring");
     setLocationError(null);
-    setPosition(null);
     setDemoMode(false);
     demoModeRef.current = false;
 
+    if (Platform.OS === "web") {
+      if (typeof window === "undefined" || typeof navigator === "undefined") {
+        setPermissionState("unavailable");
+        setLocationState("error");
+        setLocationError("Browser location is unavailable.");
+        return;
+      }
+
+      if (!window.isSecureContext) {
+        setPermissionState("unavailable");
+        setLocationState("error");
+        setLocationError("Location requires HTTPS or localhost.");
+        return;
+      }
+
+      if (!navigator.geolocation) {
+        setPermissionState("unavailable");
+        setLocationState("error");
+        setLocationError("This browser does not support location.");
+        return;
+      }
+
+      // The browser permission prompt is triggered by getCurrentPosition/watchPosition.
+      setPermissionState("granted");
+      setLocationAttempt((attempt) => attempt + 1);
+      return;
+    }
+
     try {
-      if (Platform.OS !== "web") {
-        const servicesEnabled = await Location.hasServicesEnabledAsync();
-        if (!servicesEnabled) {
-          setPermissionState("unavailable");
-          setLocationError("Location Services are switched off on this device.");
-          return;
-        }
+      const servicesEnabled = await Location.hasServicesEnabledAsync();
+      if (!servicesEnabled) {
+        setPermissionState("unavailable");
+        setLocationState("error");
+        setLocationError("Location Services are switched off on this device.");
+        return;
       }
 
       const permission = await Location.requestForegroundPermissionsAsync();
@@ -120,6 +175,7 @@ export default function App() {
       }
 
       setPermissionState("granted");
+      setLocationAttempt((attempt) => attempt + 1);
     } catch (error) {
       setPermissionState("unavailable");
       setLocationState("error");
@@ -136,19 +192,20 @@ export default function App() {
   }, [startLocationServices]);
 
   useEffect(() => {
-    if (permissionState !== "granted") {
+    if (permissionState !== "granted" || locationAttempt === 0) {
       return;
     }
 
-    let locationSubscription: Location.LocationSubscription | null = null;
-    let headingSubscription: Location.LocationSubscription | null = null;
     let cancelled = false;
+    let receivedFix = false;
+    let nativeLocationSubscription: Location.LocationSubscription | null = null;
+    let headingSubscription: Location.LocationSubscription | null = null;
+    let browserWatchId: number | null = null;
 
     const timeout = setTimeout(() => {
-      if (!cancelled && !demoModeRef.current) {
-        setLocationState((state) =>
-          state === "tracking" || state === "demo" ? state : "timed-out",
-        );
+      if (!cancelled && !receivedFix && !demoModeRef.current) {
+        setLocationState("timed-out");
+        setLocationError("No location fix was received.");
       }
     }, GPS_TIMEOUT_MS);
 
@@ -157,6 +214,7 @@ export default function App() {
         return;
       }
 
+      receivedFix = true;
       clearTimeout(timeout);
       setPosition(nextPosition);
       setLocationState("tracking");
@@ -168,95 +226,133 @@ export default function App() {
       }
     };
 
-    const reportLocationError = (reason: unknown) => {
+    const reportNativeError = (reason: unknown) => {
       if (cancelled || demoModeRef.current) {
         return;
       }
 
       setLocationError(locationErrorMessage(reason));
-      setLocationState((state) => (state === "tracking" ? state : "error"));
+      if (!receivedFix) {
+        setLocationState("error");
+      }
     };
 
-    async function subscribe() {
+    const reportBrowserError = (error: GeolocationPositionError) => {
+      if (cancelled || demoModeRef.current) {
+        return;
+      }
+
+      const message = browserLocationError(error);
+      setLocationError(message);
+
+      if (error.code === error.PERMISSION_DENIED) {
+        setPermissionState("denied");
+        setLocationState("error");
+        return;
+      }
+
+      if (!receivedFix) {
+        setLocationState(error.code === error.TIMEOUT ? "timed-out" : "error");
+      }
+    };
+
+    async function subscribeNative() {
       try {
         const lastKnown = await Location.getLastKnownPositionAsync({
-          maxAge: 5 * 60 * 1_000,
-          requiredAccuracy: 1_000,
+          maxAge: 2 * 60 * 1_000,
+          requiredAccuracy: 250,
         });
         if (lastKnown) {
           acceptPosition(lastKnown);
         }
       } catch {
-        // A cached position is optional; continue with a live request.
+        // A cached position is optional.
       }
 
-      const initialAccuracy =
-        Platform.OS === "web" ? Location.Accuracy.Balanced : Location.Accuracy.High;
-
-      Location.getCurrentPositionAsync({ accuracy: initialAccuracy })
+      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High })
         .then(acceptPosition)
-        .catch(reportLocationError);
+        .catch(reportNativeError);
 
       try {
-        const watchOptions: Location.LocationOptions =
-          Platform.OS === "web"
-            ? { accuracy: Location.Accuracy.Balanced }
-            : {
-                accuracy: Location.Accuracy.BestForNavigation,
-                timeInterval: 1_000,
-                distanceInterval: 1,
-                mayShowUserSettingsDialog: true,
-              };
-
-        locationSubscription = await Location.watchPositionAsync(
-          watchOptions,
+        nativeLocationSubscription = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.BestForNavigation,
+            timeInterval: 1_000,
+            distanceInterval: 1,
+            mayShowUserSettingsDialog: true,
+          },
           acceptPosition,
-          reportLocationError,
+          reportNativeError,
         );
       } catch (error) {
-        reportLocationError(error);
+        reportNativeError(error);
       }
 
-      // Browser compass support is inconsistent. Keep heading acquisition separate
-      // so a heading failure can never stop GPS updates.
-      if (Platform.OS !== "web") {
-        try {
-          headingSubscription = await Location.watchHeadingAsync(
-            (nextHeading) => {
-              const selectedHeading =
-                nextHeading.trueHeading >= 0
-                  ? nextHeading.trueHeading
-                  : nextHeading.magHeading;
-              setHeading(Number.isFinite(selectedHeading) ? selectedHeading : null);
-            },
-            () => setHeading(null),
-          );
-        } catch {
-          setHeading(null);
-        }
+      try {
+        headingSubscription = await Location.watchHeadingAsync(
+          (nextHeading) => {
+            const selectedHeading =
+              nextHeading.trueHeading >= 0 ? nextHeading.trueHeading : nextHeading.magHeading;
+            setHeading(Number.isFinite(selectedHeading) ? selectedHeading : null);
+          },
+          () => setHeading(null),
+        );
+      } catch {
+        setHeading(null);
       }
 
       if (cancelled) {
-        locationSubscription?.remove();
+        nativeLocationSubscription?.remove();
         headingSubscription?.remove();
       }
     }
 
-    subscribe().catch(reportLocationError);
+    function subscribeWeb() {
+      const currentOptions: PositionOptions = {
+        enableHighAccuracy: true,
+        maximumAge: 0,
+        timeout: GPS_TIMEOUT_MS,
+      };
+      const watchOptions: PositionOptions = {
+        enableHighAccuracy: true,
+        maximumAge: 3_000,
+        timeout: GPS_TIMEOUT_MS,
+      };
+
+      navigator.geolocation.getCurrentPosition(
+        (nextPosition) => acceptPosition(browserPositionToExpo(nextPosition)),
+        reportBrowserError,
+        currentOptions,
+      );
+
+      browserWatchId = navigator.geolocation.watchPosition(
+        (nextPosition) => acceptPosition(browserPositionToExpo(nextPosition)),
+        reportBrowserError,
+        watchOptions,
+      );
+    }
+
+    if (Platform.OS === "web") {
+      subscribeWeb();
+    } else {
+      subscribeNative().catch(reportNativeError);
+    }
 
     return () => {
       cancelled = true;
       clearTimeout(timeout);
-      locationSubscription?.remove();
+      nativeLocationSubscription?.remove();
       headingSubscription?.remove();
+      if (browserWatchId !== null && typeof navigator !== "undefined") {
+        navigator.geolocation.clearWatch(browserWatchId);
+      }
     };
-  }, [permissionState]);
+  }, [locationAttempt, permissionState]);
 
   const distance = useMemo(() => {
     if (!position || !currentCheckpoint) {
       return null;
     }
-
     return distanceMetres(position.coords, currentCheckpoint);
   }, [currentCheckpoint, position]);
 
@@ -264,7 +360,6 @@ export default function App() {
     if (!position || !currentCheckpoint) {
       return null;
     }
-
     return bearingDegrees(position.coords, currentCheckpoint);
   }, [currentCheckpoint, position]);
 
@@ -342,7 +437,13 @@ export default function App() {
       return;
     }
 
+    if (dwellTimerRef.current) {
+      clearTimeout(dwellTimerRef.current);
+      dwellTimerRef.current = null;
+    }
+
     demoModeRef.current = true;
+    setPopupLocation(null);
     setDemoMode(true);
     setLocationState("demo");
     setLocationError(null);
@@ -373,6 +474,7 @@ export default function App() {
       setDemoMode(false);
       demoModeRef.current = false;
       setLocationState(permissionState === "granted" ? "acquiring" : "idle");
+      setLocationAttempt((attempt) => attempt + 1);
       AsyncStorage.setItem(PROGRESS_STORAGE_KEY, "0").catch(() => undefined);
     };
 
@@ -392,13 +494,10 @@ export default function App() {
       return "All six locations unlocked";
     }
     if (demoMode) {
-      return `Demo position loaded for Location ${currentCheckpoint?.id} — hold position`;
+      return `Location ${currentCheckpoint?.id} detected — hold position`;
     }
-    if (locationState === "timed-out") {
-      return "GPS did not respond — retry or use the browser demo";
-    }
-    if (locationState === "error") {
-      return "GPS could not be read — retry or use the browser demo";
+    if (locationState === "timed-out" || locationState === "error") {
+      return "Location unavailable";
     }
     if (!position) {
       return "Finding your GPS position…";
@@ -439,8 +538,8 @@ export default function App() {
         <Text style={styles.permissionTitle}>Location access required</Text>
         <Text style={styles.permissionBody}>
           {Platform.OS === "web"
-            ? "Allow location for this website. Browser location only works on HTTPS or localhost, and your browser may also need location access in macOS settings."
-            : "This prototype only checks your location while the app is open. Precise location is needed to unlock the six outdoor checkpoints."}
+            ? "Allow location for this website, then try again. Use the HTTPS Vercel link or localhost."
+            : "This prototype checks your precise location while the app is open so it can unlock the six outdoor checkpoints."}
         </Text>
         {locationError && <Text style={styles.permissionError}>{locationError}</Text>}
         <Pressable style={styles.primaryButton} onPress={startLocationServices}>
@@ -455,17 +554,18 @@ export default function App() {
     );
   }
 
+  const retryVisible =
+    !demoMode && (locationState === "timed-out" || locationState === "error");
+
   const gpsMetric = demoMode
     ? "DEMO"
-    : locationState === "timed-out"
+    : retryVisible
       ? "NO FIX"
-      : locationState === "error"
-        ? "ERROR"
-        : position === null
-          ? "WAIT"
-          : accuracy === null
-            ? "FIXED"
-            : `±${Math.round(accuracy)} M`;
+      : position === null
+        ? "WAIT"
+        : accuracy === null
+          ? "FIXED"
+          : `±${Math.round(accuracy)} M`;
 
   return (
     <LinearGradient colors={["#08261B", "#020A08", "#07130F"]} style={styles.screen}>
@@ -495,6 +595,8 @@ export default function App() {
             <Text style={styles.appTitle}>CHRISTMAS TRACKER</Text>
           </View>
           <Pressable
+            accessibilityRole="button"
+            accessibilityHint="Long press to open hidden demo controls"
             delayLongPress={700}
             onLongPress={() => setDebugVisible((visible) => !visible)}
             style={styles.progressPill}
@@ -520,10 +622,12 @@ export default function App() {
           <View style={styles.messageTopRow}>
             <View style={[styles.statusDot, accurateEnough && styles.statusDotGood]} />
             <Text style={styles.statusText}>{statusText}</Text>
+            {retryVisible && (
+              <Pressable style={styles.retryButton} onPress={startLocationServices}>
+                <Text style={styles.retryButtonText}>RETRY</Text>
+              </Pressable>
+            )}
           </View>
-          {locationError && locationState !== "tracking" && !demoMode && (
-            <Text style={styles.locationError}>{locationError}</Text>
-          )}
           <Text style={styles.instructionText}>
             {complete
               ? "Circuit complete. Reset the route to run another demo."
@@ -551,37 +655,11 @@ export default function App() {
           </View>
         </View>
 
-        {Platform.OS === "web" && (
-          <View style={styles.browserPanel}>
-            <Text style={styles.browserTitle}>BROWSER TEST CONTROLS</Text>
-            <Text style={styles.browserBody}>
-              Desktop browsers may not have a reliable GPS fix. Test the real dot,
-              two-second hold and unlock popup by placing the demo at the active location.
-            </Text>
-            <View style={styles.debugButtons}>
-              <Pressable
-                disabled={complete}
-                style={[styles.browserButton, complete && styles.debugButtonDisabled]}
-                onPress={simulateCurrentCheckpoint}
-              >
-                <Text style={styles.browserButtonText}>TEST NEXT LOCATION</Text>
-              </Pressable>
-              <Pressable style={styles.browserButton} onPress={startLocationServices}>
-                <Text style={styles.browserButtonText}>RETRY GPS</Text>
-              </Pressable>
-              <Pressable style={styles.browserButton} onPress={resetRoute}>
-                <Text style={styles.browserButtonText}>RESET</Text>
-              </Pressable>
-            </View>
-          </View>
-        )}
-
-        {debugVisible && Platform.OS !== "web" && (
+        {debugVisible && (
           <View style={styles.debugPanel}>
-            <Text style={styles.debugTitle}>ON-SITE TEST PANEL</Text>
+            <Text style={styles.debugTitle}>DEMO CONTROLS</Text>
             <Text style={styles.debugBody}>
-              This panel is hidden during normal use. Long-press the progress badge to
-              show or hide it.
+              Simulate the active checkpoint to show its radar dot and unlock popup after two seconds.
             </Text>
             <View style={styles.debugButtons}>
               <Pressable
@@ -589,10 +667,13 @@ export default function App() {
                 style={[styles.debugButton, complete && styles.debugButtonDisabled]}
                 onPress={simulateCurrentCheckpoint}
               >
-                <Text style={styles.debugButtonText}>SIMULATE UNLOCK</Text>
+                <Text style={styles.debugButtonText}>SIMULATE NEXT</Text>
+              </Pressable>
+              <Pressable style={styles.debugButton} onPress={startLocationServices}>
+                <Text style={styles.debugButtonText}>REAL GPS</Text>
               </Pressable>
               <Pressable style={styles.debugButton} onPress={resetRoute}>
-                <Text style={styles.debugButtonText}>RESET ROUTE</Text>
+                <Text style={styles.debugButtonText}>RESET</Text>
               </Pressable>
             </View>
           </View>
@@ -698,11 +779,20 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     fontSize: 14,
   },
-  locationError: {
-    color: "#FFB7C4",
-    fontSize: 11,
-    lineHeight: 15,
-    marginTop: 8,
+  retryButton: {
+    marginLeft: 10,
+    borderRadius: 999,
+    paddingHorizontal: 11,
+    paddingVertical: 7,
+    borderWidth: 1,
+    borderColor: "rgba(122, 255, 182, 0.38)",
+    backgroundColor: "rgba(122, 255, 182, 0.1)",
+  },
+  retryButtonText: {
+    color: "#A8FFCF",
+    fontSize: 9,
+    fontWeight: "900",
+    letterSpacing: 0.8,
   },
   instructionText: {
     color: "#AFCDBE",
@@ -738,44 +828,6 @@ const styles = StyleSheet.create({
     color: "#DFFFF0",
     fontSize: 11,
     fontWeight: "900",
-  },
-  browserPanel: {
-    marginBottom: 10,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: "rgba(102, 198, 255, 0.44)",
-    backgroundColor: "rgba(5, 34, 51, 0.94)",
-    padding: 13,
-  },
-  browserTitle: {
-    color: "#9EDCFF",
-    fontSize: 10,
-    fontWeight: "900",
-    letterSpacing: 1.4,
-  },
-  browserBody: {
-    color: "#B7D7E8",
-    fontSize: 11,
-    lineHeight: 15,
-    marginTop: 5,
-  },
-  browserButton: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    minHeight: 38,
-    borderRadius: 10,
-    paddingHorizontal: 6,
-    backgroundColor: "rgba(115, 207, 255, 0.12)",
-    borderWidth: 1,
-    borderColor: "rgba(115, 207, 255, 0.28)",
-  },
-  browserButtonText: {
-    color: "#C9ECFF",
-    textAlign: "center",
-    fontSize: 8,
-    fontWeight: "900",
-    letterSpacing: 0.5,
   },
   debugPanel: {
     marginBottom: 10,
