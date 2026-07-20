@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef } from "react";
 import {
   Animated,
   Easing,
+  Platform,
   StyleSheet,
   Text,
   View,
@@ -40,16 +41,37 @@ export function Radar({
   const pulse = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    const sweepLoop = Animated.loop(
-      Animated.timing(sweep, {
+    let cancelled = false;
+    let activeAnimation: Animated.CompositeAnimation | null = null;
+
+    const runSweep = () => {
+      if (cancelled) {
+        return;
+      }
+
+      // Reset explicitly before every pass. This is more reliable in the web
+      // preview than Animated.loop with a native-driver transform.
+      sweep.setValue(0);
+      activeAnimation = Animated.timing(sweep, {
         toValue: 1,
         duration: 2_700,
         easing: Easing.linear,
-        useNativeDriver: true,
-      }),
-    );
-    sweepLoop.start();
-    return () => sweepLoop.stop();
+        useNativeDriver: Platform.OS !== "web",
+      });
+
+      activeAnimation.start(({ finished }) => {
+        if (finished && !cancelled) {
+          runSweep();
+        }
+      });
+    };
+
+    runSweep();
+
+    return () => {
+      cancelled = true;
+      activeAnimation?.stop();
+    };
   }, [sweep]);
 
   useEffect(() => {
@@ -59,13 +81,13 @@ export function Radar({
           toValue: 1,
           duration: 700,
           easing: Easing.out(Easing.quad),
-          useNativeDriver: true,
+          useNativeDriver: Platform.OS !== "web",
         }),
         Animated.timing(pulse, {
           toValue: 0,
           duration: 700,
           easing: Easing.in(Easing.quad),
-          useNativeDriver: true,
+          useNativeDriver: Platform.OS !== "web",
         }),
       ]),
     );
