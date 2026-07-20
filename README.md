@@ -5,125 +5,80 @@ A runnable Expo/React Native prototype for the six-location outdoor circuit arou
 **Working name:** CHRISTMAS TRACKER  
 **Name status:** TBC
 
-## What the prototype does
+## Open the browser prototype
 
-- Runs on iPhone, Android, and the web from one React Native codebase.
-- Requests foreground precise-location access only.
-- Displays a fictional Christmas-themed radar with a continuous sweep.
-- Activates checkpoints strictly in this order: `1 → 2 → 3 → 4 → 5 → 6`.
-- Contains no extra or non-activating wayfinding points between Locations 4 and 5.
-- Shows the next checkpoint as a radar dot only inside the 10 m reveal radius.
-- Unlocks after remaining inside the 10 m zone for approximately two seconds with acceptable GPS accuracy.
-- Displays a popup without replacing the radar screen.
-- Saves progress on the device/browser.
-
-## Install dependencies
-
-From the project folder:
+From the project root:
 
 ```bash
 npm install
-```
-
-## Preview in VS Code
-
-Start the browser version:
-
-```bash
 npm run web
 ```
 
-Or start Expo and press `w`:
+Open the localhost address printed by Expo. Do not open an HTML file directly and do not use VS Code Live Server.
 
-```bash
-npx expo start
-```
+## GPS behaviour
 
-The source HTML template is:
+The app now obtains location in three ways:
 
-```text
-public/index.html
-```
+1. Loads a recent cached location when available.
+2. Requests a fresh one-time position.
+3. Starts continuous foreground position updates.
 
-Expo injects the compiled application into `<div id="root"></div>` when it starts or exports the web app.
+Compass acquisition is separate, so a browser compass failure cannot stop GPS updates. If no position is returned after 12 seconds, the app displays a useful GPS error instead of remaining indefinitely on **Finding your GPS position**.
 
-## Create the production website
-
-```bash
-npm run build:web
-```
-
-The deployable website is generated in:
+Browser location requires localhost or an HTTPS deployment and permission for the site. On macOS, also check:
 
 ```text
-dist/
-  index.html
-  _expo/
+System Settings → Privacy & Security → Location Services
 ```
 
-Test the production export locally with:
+Ensure location is enabled for the browser being used.
 
-```bash
-npm run serve:web
-```
+## Browser demo controls
 
-## Vercel blank-screen fix
+The web version now shows a visible **BROWSER TEST CONTROLS** panel.
 
-The Vercel configuration deliberately has no catch-all rewrite. Expo's generated JavaScript lives under `/_expo/`; rewriting every request to `/` causes those JavaScript files to return HTML and leaves the page looking black.
+- **TEST NEXT LOCATION** places the demo at the active checkpoint.
+- The radar dot appears immediately.
+- After the real two-second dwell timer, the normal unlock popup appears.
+- Dismiss the popup, then press **TEST NEXT LOCATION** again to test the next checkpoint.
+- **RETRY GPS** leaves demo mode and starts a fresh GPS request.
+- **RESET** returns progress to Location 1.
 
-After replacing an older deployment, force a fresh build with:
+These controls only appear on web. The installed iPhone and Android app continues using real foreground GPS.
+
+## Production web build
 
 ```bash
 rm -rf dist .expo
-npm install
 npm run build:web
-npx vercel@latest --prod --force
+npm run serve:web
 ```
+
+Expo generates the deployable site in `dist`.
 
 ## Deploy to Vercel
 
-The included `vercel.json` tells Vercel to build the Expo web app and serve `dist`.
-
-### Git deployment
-
-Push the whole source project to GitHub/GitLab/Bitbucket, import that repository into Vercel, and deploy. Do not upload the original source ZIP as a static file.
-
-### Vercel CLI
-
 ```bash
-npx vercel@latest
+npx vercel@latest --prod
 ```
 
-Vercel will run `npm run build:web`, generate `dist/index.html`, and publish the result.
+Vercel is configured to:
 
-### Manual static upload
+- build the Expo web export;
+- serve `dist`;
+- allow same-origin browser geolocation through its Permissions-Policy header.
 
-Run `npm run build:web`, then upload the contents of `dist`, not the source folder or ZIP.
+## Prototype behaviour
 
-Browser location access requires HTTPS in production. Vercel provides HTTPS automatically.
-
-## Run it on an iPhone or Android phone
-
-1. Install **Expo Go** from the iOS App Store or Google Play.
-2. Start the project:
-
-   ```bash
-   npx expo start
-   ```
-
-3. Scan the QR code using the iPhone Camera app or Expo Go on Android.
-4. Grant precise location access while using the app.
-
-For an outdoor test, keep the app open and walk the route in order. The app is foreground-only and does not track in the background.
-
-## Hidden on-site test panel
-
-Long-press the `0/6 UNLOCKED` progress badge for about one second. The panel lets you:
-
-- Simulate the current unlock without travelling to the coordinate.
-- Reset the circuit to Location 1.
-
-Long-press the badge again to hide it.
+- iPhone, Android and web support.
+- Foreground location only.
+- Checkpoint order: `1 → 2 → 3 → 4 → 5 → 6`.
+- No extra waypoint between Locations 4 and 5.
+- Target appears within 10 m.
+- Unlock occurs after two seconds within the 10 m zone.
+- Progress is saved locally.
+- Continuous radar sweep.
 
 ## Checkpoint coordinates
 
@@ -135,42 +90,3 @@ Long-press the badge again to hide it.
 | 4 | 53.79765665559433 | -2.692083569227235 |
 | 5 | 53.79560518751338 | -2.688040524247785 |
 | 6 | 53.79629207415533 | -2.6867845831301898 |
-
-## Tuning the on-site behaviour
-
-All activation settings are in:
-
-```text
-src/constants/checkpoints.ts
-```
-
-The current values are:
-
-```ts
-REVEAL_RADIUS_METRES = 10
-UNLOCK_RADIUS_METRES = 10
-DWELL_TIME_MS = 2000
-MAX_ACCEPTABLE_ACCURACY_METRES = 30
-```
-
-Because GPS can drift near buildings, test every checkpoint on the intended iPhone before the live demo.
-
-## Useful checks
-
-```bash
-npm run typecheck
-npm run verify-route
-npx expo-doctor@latest
-```
-
-## Installable native builds
-
-Use `npx eas-cli@latest` so a global installation is not required:
-
-```bash
-npx eas-cli@latest login
-npx eas-cli@latest build --profile preview --platform android
-npx eas-cli@latest build --profile preview --platform ios
-```
-
-An Apple Developer account and registered test-device provisioning may be required for an internally distributed iPhone build.

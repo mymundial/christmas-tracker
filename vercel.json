@@ -1,5 +1,25 @@
 {
-  "buildCommand": "npm run build:web",
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "npx expo export -p web",
   "outputDirectory": "dist",
-  "framework": null
+  "devCommand": "npx expo start --web",
+  "cleanUrls": true,
+  "framework": null,
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "Permissions-Policy",
+          "value": "geolocation=(self)"
+        }
+      ]
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/:path*",
+      "destination": "/"
+    }
+  ]
 }

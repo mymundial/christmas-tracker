@@ -1,6 +1,6 @@
 {
   "name": "christmas-tracker",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "main": "index.ts",
   "scripts": {
@@ -8,8 +8,8 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "build": "expo export --platform web",
-    "build:web": "expo export --platform web",
+    "build": "expo export -p web",
+    "build:web": "expo export -p web",
     "serve:web": "expo serve",
     "vercel-build": "expo export --platform web",
     "typecheck": "tsc --noEmit",
