@@ -1,6 +1,6 @@
 {
   "name": "christmas-tracker",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "private": true,
   "main": "index.ts",
   "scripts": {
@@ -16,17 +16,18 @@
     "verify-route": "node scripts/verify-route.mjs"
   },
   "dependencies": {
+    "@expo/metro-runtime": "~6.1.2",
     "@react-native-async-storage/async-storage": "2.2.0",
     "expo": "~54.0.35",
     "expo-linear-gradient": "~15.0.8",
     "expo-location": "~19.0.8",
     "expo-status-bar": "~3.0.9",
     "react": "19.1.0",
+    "react-dom": "19.1.0",
     "react-native": "0.81.5",
     "react-native-svg": "15.12.1",
-    "@expo/metro-runtime": "~6.1.2",
-    "react-dom": "19.1.0",
-    "react-native-web": "~0.21.0"
+    "react-native-web": "~0.21.0",
+    "web": "^0.0.2"
   },
   "devDependencies": {
     "@types/react": "~19.1.0",

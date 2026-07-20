@@ -29,11 +29,23 @@ import {
 } from "./src/constants/checkpoints";
 import { bearingDegrees, distanceMetres } from "./src/utils/geo";
 
-type PermissionState = "checking" | "granted" | "denied" | "unavailable";
+type PermissionState = "checking" | "prompt" | "granted" | "denied" | "unavailable";
 type LocationState = "idle" | "acquiring" | "tracking" | "timed-out" | "error" | "demo";
 
 const GPS_TIMEOUT_MS = 30_000;
 const WEB_GPS_TIMEOUT_MS = 45_000;
+
+function isEmbeddedBrowserContext(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  try {
+    return window.self !== window.top;
+  } catch {
+    return true;
+  }
+}
 
 const snowflakes = [
   { left: "7%", top: "12%", size: 12, opacity: 0.35 },
@@ -54,14 +66,19 @@ function locationErrorMessage(error: unknown): string {
   return "The device did not return a location.";
 }
 
-function browserLocationErrorMessage(error: GeolocationPositionError): string {
+function browserLocationErrorMessage(
+  error: GeolocationPositionError,
+  embedded: boolean,
+): string {
   switch (error.code) {
     case error.PERMISSION_DENIED:
-      return "Location permission is denied for this website.";
+      return embedded
+        ? "This embedded preview is blocking GPS. Open the site directly in Safari."
+        : "Safari refused this GPS request. Tap TRY GPS; if no prompt appears, open Safari Website Settings and set Location to Allow.";
     case error.POSITION_UNAVAILABLE:
-      return "The phone could not calculate a GPS position yet. Open this link directly in Safari and check that Location Services and Precise Location are enabled.";
+      return "GPS signal is temporarily unavailable. Tracking is still active; keep the page open and move into open sky.";
     case error.TIMEOUT:
-      return "The GPS request timed out. Tracking is still running; move into open sky and retry if needed.";
+      return "Still waiting for a GPS fix. Tracking is still active; keep the page open and try again if needed.";
     default:
       return error.message || "The phone did not return a GPS position.";
   }
@@ -97,10 +114,15 @@ export default function App() {
   const [popupLocation, setPopupLocation] = useState<number | null>(null);
   const [debugVisible, setDebugVisible] = useState(false);
   const [demoMode, setDemoMode] = useState(false);
+  const [webEmbedded, setWebEmbedded] = useState(false);
+  const [webErrorCode, setWebErrorCode] = useState<number | null>(null);
 
   const dwellTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unlockingRef = useRef(false);
   const demoModeRef = useRef(false);
+  const webWatchIdRef = useRef<number | null>(null);
+  const webTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const webReceivedFixRef = useRef(false);
 
   const complete = currentIndex >= CHECKPOINTS.length;
   const currentCheckpoint = complete ? null : CHECKPOINTS[currentIndex];
@@ -123,7 +145,116 @@ export default function App() {
       .finally(() => setProgressLoaded(true));
   }, []);
 
-  const startLocationServices = useCallback(async () => {
+  const stopWebLocation = useCallback(() => {
+    if (typeof navigator !== "undefined" && webWatchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(webWatchIdRef.current);
+      webWatchIdRef.current = null;
+    }
+
+    if (webTimeoutRef.current) {
+      clearTimeout(webTimeoutRef.current);
+      webTimeoutRef.current = null;
+    }
+  }, []);
+
+  const startWebLocation = useCallback(() => {
+    const browserWindow = typeof window === "undefined" ? null : window;
+    const browserNavigator = typeof navigator === "undefined" ? null : navigator;
+    const embedded = isEmbeddedBrowserContext();
+
+    setWebEmbedded(embedded);
+    setWebErrorCode(null);
+    setLocationError(null);
+    setLocationState("acquiring");
+    setDemoMode(false);
+    demoModeRef.current = false;
+    webReceivedFixRef.current = false;
+    stopWebLocation();
+
+    if (!browserWindow?.isSecureContext) {
+      setPermissionState("unavailable");
+      setLocationState("error");
+      setLocationError("Browser GPS requires an HTTPS address or localhost.");
+      return;
+    }
+
+    if (!browserNavigator?.geolocation) {
+      setPermissionState("unavailable");
+      setLocationState("error");
+      setLocationError("This browser does not provide location services.");
+      return;
+    }
+
+    // Calling watchPosition directly from this button handler preserves the
+    // browser's user gesture when Safari needs to show its permission prompt.
+    setPermissionState("granted");
+
+    const handleSuccess = (nextPosition: GeolocationPosition) => {
+      if (demoModeRef.current) {
+        return;
+      }
+
+      webReceivedFixRef.current = true;
+      if (webTimeoutRef.current) {
+        clearTimeout(webTimeoutRef.current);
+        webTimeoutRef.current = null;
+      }
+      setPermissionState("granted");
+      setPosition(browserPositionToExpoLocation(nextPosition));
+      setLocationState("tracking");
+      setLocationError(null);
+      setWebErrorCode(null);
+
+      const courseHeading = nextPosition.coords.heading;
+      if (typeof courseHeading === "number" && Number.isFinite(courseHeading)) {
+        setHeading(courseHeading);
+      }
+    };
+
+    const handleError = (error: GeolocationPositionError) => {
+      if (demoModeRef.current) {
+        return;
+      }
+
+      setWebErrorCode(error.code);
+      setLocationError(browserLocationErrorMessage(error, embedded));
+
+      if (error.code === error.PERMISSION_DENIED) {
+        setPermissionState("denied");
+        setLocationState("error");
+        stopWebLocation();
+        return;
+      }
+
+      // POSITION_UNAVAILABLE and TIMEOUT do not mean the user revoked
+      // permission. Keep the watcher alive so a later GPS fix can recover.
+      setPermissionState("granted");
+      if (!webReceivedFixRef.current) {
+        setLocationState(error.code === error.TIMEOUT ? "timed-out" : "error");
+      }
+    };
+
+    webWatchIdRef.current = browserNavigator.geolocation.watchPosition(
+      handleSuccess,
+      handleError,
+      {
+        enableHighAccuracy: true,
+        maximumAge: 5_000,
+        timeout: WEB_GPS_TIMEOUT_MS,
+      },
+    );
+
+    webTimeoutRef.current = setTimeout(() => {
+      if (!webReceivedFixRef.current && !demoModeRef.current) {
+        setLocationState("timed-out");
+        setLocationError(
+          "Still waiting for a GPS fix. Tracking remains active; keep the page open and move into open sky.",
+        );
+      }
+    }, WEB_GPS_TIMEOUT_MS);
+  }, [stopWebLocation]);
+
+  const startNativeLocationServices = useCallback(async () => {
     setPermissionState("checking");
     setLocationState("acquiring");
     setLocationError(null);
@@ -131,32 +262,6 @@ export default function App() {
     demoModeRef.current = false;
 
     try {
-      if (Platform.OS === "web") {
-        const browserWindow = typeof window === "undefined" ? null : window;
-        const browserNavigator = typeof navigator === "undefined" ? null : navigator;
-
-        if (!browserWindow?.isSecureContext) {
-          setPermissionState("unavailable");
-          setLocationState("error");
-          setLocationError("Browser GPS requires an HTTPS address or localhost.");
-          return;
-        }
-
-        if (!browserNavigator?.geolocation) {
-          setPermissionState("unavailable");
-          setLocationState("error");
-          setLocationError("This browser does not provide location services.");
-          return;
-        }
-
-        // On web, let the browser geolocation request itself handle the permission
-        // prompt. Expo SDK 54's web permission preflight can report an ambiguous
-        // result when iOS returns POSITION_UNAVAILABLE.
-        setPermissionState("granted");
-        setLocationAttempt((attempt) => attempt + 1);
-        return;
-      }
-
       const servicesEnabled = await Location.hasServicesEnabledAsync();
       if (!servicesEnabled) {
         setPermissionState("unavailable");
@@ -183,15 +288,86 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    startLocationServices().catch((error) => {
+    if (Platform.OS !== "web") {
+      startNativeLocationServices().catch((error) => {
+        setPermissionState("unavailable");
+        setLocationState("error");
+        setLocationError(locationErrorMessage(error));
+      });
+      return;
+    }
+
+    let active = true;
+    const embedded = isEmbeddedBrowserContext();
+    setWebEmbedded(embedded);
+
+    const browserWindow = typeof window === "undefined" ? null : window;
+    const browserNavigator = typeof navigator === "undefined" ? null : navigator;
+
+    if (!browserWindow?.isSecureContext) {
       setPermissionState("unavailable");
       setLocationState("error");
-      setLocationError(locationErrorMessage(error));
-    });
-  }, [startLocationServices]);
+      setLocationError("Browser GPS requires an HTTPS address or localhost.");
+      return;
+    }
+
+    if (!browserNavigator?.geolocation) {
+      setPermissionState("unavailable");
+      setLocationState("error");
+      setLocationError("This browser does not provide location services.");
+      return;
+    }
+
+    // Preserve a permission already granted to this exact website origin.
+    // When the browser says "prompt" (or does not support Permissions.query),
+    // wait for a visible tap so Safari can display the prompt reliably.
+    const permissions = browserNavigator.permissions;
+    if (!permissions?.query) {
+      setPermissionState("prompt");
+      setLocationState("idle");
+      return;
+    }
+
+    permissions
+      .query({ name: "geolocation" as PermissionName })
+      .then((result) => {
+        if (!active) {
+          return;
+        }
+
+        if (result.state === "granted") {
+          startWebLocation();
+        } else {
+          // Do not treat Permissions.query() as the final verdict on Safari.
+          // The actual geolocation call, made from a tap, is authoritative.
+          setPermissionState("prompt");
+          setLocationState("idle");
+          setLocationError(
+            embedded
+              ? "This preview may block GPS. Open the site directly in Safari."
+              : null,
+          );
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setPermissionState("prompt");
+          setLocationState("idle");
+        }
+      });
+
+    return () => {
+      active = false;
+      stopWebLocation();
+    };
+  }, [startNativeLocationServices, startWebLocation, stopWebLocation]);
 
   useEffect(() => {
-    if (permissionState !== "granted" || locationAttempt === 0) {
+    if (
+      Platform.OS === "web" ||
+      permissionState !== "granted" ||
+      locationAttempt === 0
+    ) {
       return;
     }
 
@@ -199,18 +375,15 @@ export default function App() {
     let receivedFix = false;
     let locationSubscription: Location.LocationSubscription | null = null;
     let headingSubscription: Location.LocationSubscription | null = null;
-    let browserWatchId: number | null = null;
 
     const timeout = setTimeout(() => {
       if (!cancelled && !receivedFix && !demoModeRef.current) {
         setLocationState("timed-out");
         setLocationError(
-          Platform.OS === "web"
-            ? "Still waiting for a GPS fix. Tracking continues in the background of this screen."
-            : "No location fix was received yet. You can retry while tracking continues.",
+          "No location fix was received yet. You can retry while tracking continues.",
         );
       }
-    }, Platform.OS === "web" ? WEB_GPS_TIMEOUT_MS : GPS_TIMEOUT_MS);
+    }, GPS_TIMEOUT_MS);
 
     const acceptPosition = (nextPosition: Location.LocationObject) => {
       if (cancelled || demoModeRef.current) {
@@ -239,63 +412,6 @@ export default function App() {
         setLocationState("error");
       }
     };
-
-    if (Platform.OS === "web") {
-      const geolocation = navigator.geolocation;
-
-      const handleBrowserSuccess = (nextPosition: GeolocationPosition) => {
-        acceptPosition(browserPositionToExpoLocation(nextPosition));
-      };
-
-      const handleBrowserError = (error: GeolocationPositionError) => {
-        if (cancelled || demoModeRef.current) {
-          return;
-        }
-
-        const message = browserLocationErrorMessage(error);
-        setLocationError(message);
-
-        if (error.code === error.PERMISSION_DENIED) {
-          setPermissionState("denied");
-          setLocationState("error");
-          return;
-        }
-
-        if (!receivedFix) {
-          setLocationState(error.code === error.TIMEOUT ? "timed-out" : "error");
-        }
-      };
-
-      const browserOptions: PositionOptions = {
-        enableHighAccuracy: true,
-        maximumAge: 0,
-        timeout: WEB_GPS_TIMEOUT_MS,
-      };
-
-      geolocation.getCurrentPosition(
-        handleBrowserSuccess,
-        handleBrowserError,
-        browserOptions,
-      );
-
-      browserWatchId = geolocation.watchPosition(
-        handleBrowserSuccess,
-        handleBrowserError,
-        {
-          enableHighAccuracy: true,
-          maximumAge: 3_000,
-          timeout: WEB_GPS_TIMEOUT_MS,
-        },
-      );
-
-      return () => {
-        cancelled = true;
-        clearTimeout(timeout);
-        if (browserWatchId !== null) {
-          geolocation.clearWatch(browserWatchId);
-        }
-      };
-    }
 
     async function subscribeNative() {
       try {
@@ -359,6 +475,26 @@ export default function App() {
       headingSubscription?.remove();
     };
   }, [locationAttempt, permissionState]);
+
+  const startLocationServices = useCallback(() => {
+    if (Platform.OS === "web") {
+      startWebLocation();
+      return Promise.resolve();
+    }
+
+    return startNativeLocationServices();
+  }, [startNativeLocationServices, startWebLocation]);
+
+  const openDirectBrowserPage = useCallback(() => {
+    if (Platform.OS !== "web" || typeof window === "undefined") {
+      return;
+    }
+
+    const directWindow = window.open(window.location.href, "_blank", "noopener,noreferrer");
+    if (!directWindow) {
+      window.location.assign(window.location.href);
+    }
+  }, []);
 
   const distance = useMemo(() => {
     if (!position || !currentCheckpoint) {
@@ -507,6 +643,16 @@ export default function App() {
     if (demoMode) {
       return `Location ${currentCheckpoint?.id} detected — hold position`;
     }
+    if (
+      Platform.OS === "web" &&
+      webEmbedded &&
+      permissionState !== "granted"
+    ) {
+      return "Open this page directly in Safari to use GPS";
+    }
+    if (Platform.OS === "web" && permissionState === "prompt") {
+      return "Tap START GPS to begin location tracking";
+    }
     if (locationState === "timed-out" || locationState === "error") {
       return locationError ?? "Location unavailable";
     }
@@ -528,11 +674,13 @@ export default function App() {
     demoMode,
     locationError,
     locationState,
+    permissionState,
     position,
+    webEmbedded,
     targetVisible,
   ]);
 
-  if (!progressLoaded || permissionState === "checking") {
+  if (!progressLoaded || (Platform.OS !== "web" && permissionState === "checking")) {
     return (
       <LinearGradient colors={["#061912", "#020807"]} style={styles.loadingScreen}>
         <StatusBar style="light" />
@@ -542,7 +690,7 @@ export default function App() {
     );
   }
 
-  if (permissionState !== "granted") {
+  if (Platform.OS !== "web" && permissionState !== "granted") {
     return (
       <LinearGradient colors={["#071B14", "#020706"]} style={styles.permissionScreen}>
         <StatusBar style="light" />
@@ -566,18 +714,35 @@ export default function App() {
     );
   }
 
-  const retryVisible =
-    !demoMode && (locationState === "timed-out" || locationState === "error");
+  const gpsActionVisible =
+    !demoMode &&
+    (permissionState === "prompt" ||
+      permissionState === "denied" ||
+      permissionState === "unavailable" ||
+      locationState === "timed-out" ||
+      locationState === "error");
+  const openDirectVisible =
+    Platform.OS === "web" && webEmbedded && permissionState !== "granted";
+  const gpsActionLabel = openDirectVisible
+    ? "OPEN DIRECT"
+    : permissionState === "prompt"
+      ? "START GPS"
+      : "TRY GPS";
+  const gpsAction = openDirectVisible ? openDirectBrowserPage : startLocationServices;
 
   const gpsMetric = demoMode
     ? "DEMO"
-    : retryVisible
-      ? "NO FIX"
-      : position === null
-        ? "WAIT"
-        : accuracy === null
-          ? "FIXED"
-          : `±${Math.round(accuracy)} M`;
+    : permissionState === "prompt"
+      ? "OFF"
+      : permissionState === "denied"
+        ? "BLOCKED"
+        : locationState === "timed-out" || locationState === "error"
+          ? "NO FIX"
+          : position === null
+            ? "WAIT"
+            : accuracy === null
+              ? "FIXED"
+              : `±${Math.round(accuracy)} M`;
 
   return (
     <LinearGradient colors={["#08261B", "#020A08", "#07130F"]} style={styles.screen}>
@@ -634,9 +799,9 @@ export default function App() {
           <View style={styles.messageTopRow}>
             <View style={[styles.statusDot, accurateEnough && styles.statusDotGood]} />
             <Text style={styles.statusText}>{statusText}</Text>
-            {retryVisible && (
-              <Pressable style={styles.retryButton} onPress={startLocationServices}>
-                <Text style={styles.retryButtonText}>RETRY</Text>
+            {gpsActionVisible && (
+              <Pressable style={styles.retryButton} onPress={gpsAction}>
+                <Text style={styles.retryButtonText}>{gpsActionLabel}</Text>
               </Pressable>
             )}
           </View>
@@ -672,6 +837,9 @@ export default function App() {
             <Text style={styles.debugTitle}>DEMO CONTROLS</Text>
             <Text style={styles.debugBody}>
               Simulate the active checkpoint to show its radar dot and unlock popup after two seconds.
+              {Platform.OS === "web"
+                ? ` Web: ${webEmbedded ? "embedded" : "direct"}; permission: ${permissionState}; error code: ${webErrorCode ?? "none"}.`
+                : ""}
             </Text>
             <View style={styles.debugButtons}>
               <Pressable

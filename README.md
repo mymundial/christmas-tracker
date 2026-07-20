@@ -49,3 +49,8 @@ This version restores the Expo Location permission and tracking path on web and 
 ## v1.8 iPhone web GPS correction
 
 Web tracking now uses the browser's geolocation API directly with high-accuracy mode, a zero-age initial fix, a continuing watch, and explicit handling for permission-denied, position-unavailable, and timeout responses. Native iOS and Android builds continue to use `expo-location`.
+
+
+## v1.9 Safari permission-flow correction
+
+The web app no longer requests browser geolocation twice or treats every GPS failure as a changed permission. If Safari already reports permission as granted, tracking starts automatically. If Safari reports a prompt state (or does not expose the Permissions API), the normal radar screen shows a small **START GPS** button so the geolocation call occurs directly from a user tap. Embedded previews are detected and direct the user to open the page as a top-level Safari tab.
