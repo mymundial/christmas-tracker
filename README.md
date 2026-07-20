@@ -45,3 +45,7 @@ Scan the QR code with Expo Go. The app uses foreground location only while it is
 ## v1.7 location correction
 
 This version restores the Expo Location permission and tracking path on web and removes the custom Vercel `Permissions-Policy` header. Open the deployed URL directly in Safari, Chrome, or Firefox rather than an embedded VS Code preview pane, because embedded previews may deny geolocation.
+
+## v1.8 iPhone web GPS correction
+
+Web tracking now uses the browser's geolocation API directly with high-accuracy mode, a zero-age initial fix, a continuing watch, and explicit handling for permission-denied, position-unavailable, and timeout responses. Native iOS and Android builds continue to use `expo-location`.

@@ -32,7 +32,8 @@ import { bearingDegrees, distanceMetres } from "./src/utils/geo";
 type PermissionState = "checking" | "granted" | "denied" | "unavailable";
 type LocationState = "idle" | "acquiring" | "tracking" | "timed-out" | "error" | "demo";
 
-const GPS_TIMEOUT_MS = 18_000;
+const GPS_TIMEOUT_MS = 30_000;
+const WEB_GPS_TIMEOUT_MS = 45_000;
 
 const snowflakes = [
   { left: "7%", top: "12%", size: 12, opacity: 0.35 },
@@ -51,6 +52,34 @@ function locationErrorMessage(error: unknown): string {
     return error;
   }
   return "The device did not return a location.";
+}
+
+function browserLocationErrorMessage(error: GeolocationPositionError): string {
+  switch (error.code) {
+    case error.PERMISSION_DENIED:
+      return "Location permission is denied for this website.";
+    case error.POSITION_UNAVAILABLE:
+      return "The phone could not calculate a GPS position yet. Open this link directly in Safari and check that Location Services and Precise Location are enabled.";
+    case error.TIMEOUT:
+      return "The GPS request timed out. Tracking is still running; move into open sky and retry if needed.";
+    default:
+      return error.message || "The phone did not return a GPS position.";
+  }
+}
+
+function browserPositionToExpoLocation(position: GeolocationPosition): Location.LocationObject {
+  return {
+    timestamp: position.timestamp,
+    coords: {
+      latitude: position.coords.latitude,
+      longitude: position.coords.longitude,
+      altitude: position.coords.altitude,
+      accuracy: position.coords.accuracy,
+      altitudeAccuracy: position.coords.altitudeAccuracy,
+      heading: position.coords.heading,
+      speed: position.coords.speed,
+    },
+  };
 }
 
 export default function App() {
@@ -102,14 +131,38 @@ export default function App() {
     demoModeRef.current = false;
 
     try {
-      if (Platform.OS !== "web") {
-        const servicesEnabled = await Location.hasServicesEnabledAsync();
-        if (!servicesEnabled) {
+      if (Platform.OS === "web") {
+        const browserWindow = typeof window === "undefined" ? null : window;
+        const browserNavigator = typeof navigator === "undefined" ? null : navigator;
+
+        if (!browserWindow?.isSecureContext) {
           setPermissionState("unavailable");
           setLocationState("error");
-          setLocationError("Location Services are switched off on this device.");
+          setLocationError("Browser GPS requires an HTTPS address or localhost.");
           return;
         }
+
+        if (!browserNavigator?.geolocation) {
+          setPermissionState("unavailable");
+          setLocationState("error");
+          setLocationError("This browser does not provide location services.");
+          return;
+        }
+
+        // On web, let the browser geolocation request itself handle the permission
+        // prompt. Expo SDK 54's web permission preflight can report an ambiguous
+        // result when iOS returns POSITION_UNAVAILABLE.
+        setPermissionState("granted");
+        setLocationAttempt((attempt) => attempt + 1);
+        return;
+      }
+
+      const servicesEnabled = await Location.hasServicesEnabledAsync();
+      if (!servicesEnabled) {
+        setPermissionState("unavailable");
+        setLocationState("error");
+        setLocationError("Location Services are switched off on this device.");
+        return;
       }
 
       const permission = await Location.requestForegroundPermissionsAsync();
@@ -146,13 +199,18 @@ export default function App() {
     let receivedFix = false;
     let locationSubscription: Location.LocationSubscription | null = null;
     let headingSubscription: Location.LocationSubscription | null = null;
+    let browserWatchId: number | null = null;
 
     const timeout = setTimeout(() => {
       if (!cancelled && !receivedFix && !demoModeRef.current) {
         setLocationState("timed-out");
-        setLocationError("No location fix was received yet. You can retry while tracking continues.");
+        setLocationError(
+          Platform.OS === "web"
+            ? "Still waiting for a GPS fix. Tracking continues in the background of this screen."
+            : "No location fix was received yet. You can retry while tracking continues.",
+        );
       }
-    }, GPS_TIMEOUT_MS);
+    }, Platform.OS === "web" ? WEB_GPS_TIMEOUT_MS : GPS_TIMEOUT_MS);
 
     const acceptPosition = (nextPosition: Location.LocationObject) => {
       if (cancelled || demoModeRef.current) {
@@ -182,7 +240,64 @@ export default function App() {
       }
     };
 
-    async function subscribe() {
+    if (Platform.OS === "web") {
+      const geolocation = navigator.geolocation;
+
+      const handleBrowserSuccess = (nextPosition: GeolocationPosition) => {
+        acceptPosition(browserPositionToExpoLocation(nextPosition));
+      };
+
+      const handleBrowserError = (error: GeolocationPositionError) => {
+        if (cancelled || demoModeRef.current) {
+          return;
+        }
+
+        const message = browserLocationErrorMessage(error);
+        setLocationError(message);
+
+        if (error.code === error.PERMISSION_DENIED) {
+          setPermissionState("denied");
+          setLocationState("error");
+          return;
+        }
+
+        if (!receivedFix) {
+          setLocationState(error.code === error.TIMEOUT ? "timed-out" : "error");
+        }
+      };
+
+      const browserOptions: PositionOptions = {
+        enableHighAccuracy: true,
+        maximumAge: 0,
+        timeout: WEB_GPS_TIMEOUT_MS,
+      };
+
+      geolocation.getCurrentPosition(
+        handleBrowserSuccess,
+        handleBrowserError,
+        browserOptions,
+      );
+
+      browserWatchId = geolocation.watchPosition(
+        handleBrowserSuccess,
+        handleBrowserError,
+        {
+          enableHighAccuracy: true,
+          maximumAge: 3_000,
+          timeout: WEB_GPS_TIMEOUT_MS,
+        },
+      );
+
+      return () => {
+        cancelled = true;
+        clearTimeout(timeout);
+        if (browserWatchId !== null) {
+          geolocation.clearWatch(browserWatchId);
+        }
+      };
+    }
+
+    async function subscribeNative() {
       try {
         const lastKnown = await Location.getLastKnownPositionAsync({
           maxAge: 2 * 60 * 1_000,
@@ -195,26 +310,18 @@ export default function App() {
         // A cached position is optional; continue with a live request.
       }
 
-      const initialAccuracy =
-        Platform.OS === "web" ? Location.Accuracy.Balanced : Location.Accuracy.High;
-
-      Location.getCurrentPositionAsync({ accuracy: initialAccuracy })
+      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High })
         .then(acceptPosition)
         .catch(reportLocationError);
 
       try {
-        const watchOptions: Location.LocationOptions =
-          Platform.OS === "web"
-            ? { accuracy: Location.Accuracy.Balanced }
-            : {
-                accuracy: Location.Accuracy.BestForNavigation,
-                timeInterval: 1_000,
-                distanceInterval: 1,
-                mayShowUserSettingsDialog: true,
-              };
-
         locationSubscription = await Location.watchPositionAsync(
-          watchOptions,
+          {
+            accuracy: Location.Accuracy.BestForNavigation,
+            timeInterval: 1_000,
+            distanceInterval: 1,
+            mayShowUserSettingsDialog: true,
+          },
           acceptPosition,
           reportLocationError,
         );
@@ -222,21 +329,19 @@ export default function App() {
         reportLocationError(error);
       }
 
-      if (Platform.OS !== "web") {
-        try {
-          headingSubscription = await Location.watchHeadingAsync(
-            (nextHeading) => {
-              const selectedHeading =
-                nextHeading.trueHeading >= 0
-                  ? nextHeading.trueHeading
-                  : nextHeading.magHeading;
-              setHeading(Number.isFinite(selectedHeading) ? selectedHeading : null);
-            },
-            () => setHeading(null),
-          );
-        } catch {
-          setHeading(null);
-        }
+      try {
+        headingSubscription = await Location.watchHeadingAsync(
+          (nextHeading) => {
+            const selectedHeading =
+              nextHeading.trueHeading >= 0
+                ? nextHeading.trueHeading
+                : nextHeading.magHeading;
+            setHeading(Number.isFinite(selectedHeading) ? selectedHeading : null);
+          },
+          () => setHeading(null),
+        );
+      } catch {
+        setHeading(null);
       }
 
       if (cancelled) {
@@ -245,7 +350,7 @@ export default function App() {
       }
     }
 
-    subscribe().catch(reportLocationError);
+    subscribeNative().catch(reportLocationError);
 
     return () => {
       cancelled = true;
@@ -403,7 +508,7 @@ export default function App() {
       return `Location ${currentCheckpoint?.id} detected — hold position`;
     }
     if (locationState === "timed-out" || locationState === "error") {
-      return "Location unavailable";
+      return locationError ?? "Location unavailable";
     }
     if (!position) {
       return "Finding your GPS position…";
@@ -421,6 +526,7 @@ export default function App() {
     complete,
     currentCheckpoint?.id,
     demoMode,
+    locationError,
     locationState,
     position,
     targetVisible,
