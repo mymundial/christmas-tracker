@@ -41,3 +41,7 @@ npx expo start
 ```
 
 Scan the QR code with Expo Go. The app uses foreground location only while it is open.
+
+## v1.7 location correction
+
+This version restores the Expo Location permission and tracking path on web and removes the custom Vercel `Permissions-Policy` header. Open the deployed URL directly in Safari, Chrome, or Firefox rather than an embedded VS Code preview pane, because embedded previews may deny geolocation.

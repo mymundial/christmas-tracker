@@ -4,16 +4,5 @@
   "outputDirectory": "dist",
   "devCommand": "npx expo start --web",
   "cleanUrls": true,
-  "framework": null,
-  "headers": [
-    {
-      "source": "/(.*)",
-      "headers": [
-        {
-          "key": "Permissions-Policy",
-          "value": "geolocation=(self)"
-        }
-      ]
-    }
-  ]
+  "framework": null
 }

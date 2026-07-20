@@ -53,34 +53,6 @@ function locationErrorMessage(error: unknown): string {
   return "The device did not return a location.";
 }
 
-function browserPositionToExpo(position: GeolocationPosition): Location.LocationObject {
-  return {
-    timestamp: position.timestamp,
-    coords: {
-      latitude: position.coords.latitude,
-      longitude: position.coords.longitude,
-      altitude: position.coords.altitude,
-      accuracy: position.coords.accuracy,
-      altitudeAccuracy: position.coords.altitudeAccuracy,
-      heading: position.coords.heading,
-      speed: position.coords.speed,
-    },
-  };
-}
-
-function browserLocationError(error: GeolocationPositionError): string {
-  switch (error.code) {
-    case error.PERMISSION_DENIED:
-      return "Location permission is blocked for this website.";
-    case error.POSITION_UNAVAILABLE:
-      return "A location fix is not currently available.";
-    case error.TIMEOUT:
-      return "The location request timed out.";
-    default:
-      return error.message || "The browser did not return a location.";
-  }
-}
-
 export default function App() {
   const { width, height } = useWindowDimensions();
   const radarSize = Math.min(width - 34, height * 0.47, 430);
@@ -129,41 +101,15 @@ export default function App() {
     setDemoMode(false);
     demoModeRef.current = false;
 
-    if (Platform.OS === "web") {
-      if (typeof window === "undefined" || typeof navigator === "undefined") {
-        setPermissionState("unavailable");
-        setLocationState("error");
-        setLocationError("Browser location is unavailable.");
-        return;
-      }
-
-      if (!window.isSecureContext) {
-        setPermissionState("unavailable");
-        setLocationState("error");
-        setLocationError("Location requires HTTPS or localhost.");
-        return;
-      }
-
-      if (!navigator.geolocation) {
-        setPermissionState("unavailable");
-        setLocationState("error");
-        setLocationError("This browser does not support location.");
-        return;
-      }
-
-      // The browser permission prompt is triggered by getCurrentPosition/watchPosition.
-      setPermissionState("granted");
-      setLocationAttempt((attempt) => attempt + 1);
-      return;
-    }
-
     try {
-      const servicesEnabled = await Location.hasServicesEnabledAsync();
-      if (!servicesEnabled) {
-        setPermissionState("unavailable");
-        setLocationState("error");
-        setLocationError("Location Services are switched off on this device.");
-        return;
+      if (Platform.OS !== "web") {
+        const servicesEnabled = await Location.hasServicesEnabledAsync();
+        if (!servicesEnabled) {
+          setPermissionState("unavailable");
+          setLocationState("error");
+          setLocationError("Location Services are switched off on this device.");
+          return;
+        }
       }
 
       const permission = await Location.requestForegroundPermissionsAsync();
@@ -198,14 +144,13 @@ export default function App() {
 
     let cancelled = false;
     let receivedFix = false;
-    let nativeLocationSubscription: Location.LocationSubscription | null = null;
+    let locationSubscription: Location.LocationSubscription | null = null;
     let headingSubscription: Location.LocationSubscription | null = null;
-    let browserWatchId: number | null = null;
 
     const timeout = setTimeout(() => {
       if (!cancelled && !receivedFix && !demoModeRef.current) {
         setLocationState("timed-out");
-        setLocationError("No location fix was received.");
+        setLocationError("No location fix was received yet. You can retry while tracking continues.");
       }
     }, GPS_TIMEOUT_MS);
 
@@ -226,7 +171,7 @@ export default function App() {
       }
     };
 
-    const reportNativeError = (reason: unknown) => {
+    const reportLocationError = (reason: unknown) => {
       if (cancelled || demoModeRef.current) {
         return;
       }
@@ -237,115 +182,76 @@ export default function App() {
       }
     };
 
-    const reportBrowserError = (error: GeolocationPositionError) => {
-      if (cancelled || demoModeRef.current) {
-        return;
-      }
-
-      const message = browserLocationError(error);
-      setLocationError(message);
-
-      if (error.code === error.PERMISSION_DENIED) {
-        setPermissionState("denied");
-        setLocationState("error");
-        return;
-      }
-
-      if (!receivedFix) {
-        setLocationState(error.code === error.TIMEOUT ? "timed-out" : "error");
-      }
-    };
-
-    async function subscribeNative() {
+    async function subscribe() {
       try {
         const lastKnown = await Location.getLastKnownPositionAsync({
           maxAge: 2 * 60 * 1_000,
-          requiredAccuracy: 250,
+          requiredAccuracy: 500,
         });
         if (lastKnown) {
           acceptPosition(lastKnown);
         }
       } catch {
-        // A cached position is optional.
+        // A cached position is optional; continue with a live request.
       }
 
-      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High })
+      const initialAccuracy =
+        Platform.OS === "web" ? Location.Accuracy.Balanced : Location.Accuracy.High;
+
+      Location.getCurrentPositionAsync({ accuracy: initialAccuracy })
         .then(acceptPosition)
-        .catch(reportNativeError);
+        .catch(reportLocationError);
 
       try {
-        nativeLocationSubscription = await Location.watchPositionAsync(
-          {
-            accuracy: Location.Accuracy.BestForNavigation,
-            timeInterval: 1_000,
-            distanceInterval: 1,
-            mayShowUserSettingsDialog: true,
-          },
+        const watchOptions: Location.LocationOptions =
+          Platform.OS === "web"
+            ? { accuracy: Location.Accuracy.Balanced }
+            : {
+                accuracy: Location.Accuracy.BestForNavigation,
+                timeInterval: 1_000,
+                distanceInterval: 1,
+                mayShowUserSettingsDialog: true,
+              };
+
+        locationSubscription = await Location.watchPositionAsync(
+          watchOptions,
           acceptPosition,
-          reportNativeError,
+          reportLocationError,
         );
       } catch (error) {
-        reportNativeError(error);
+        reportLocationError(error);
       }
 
-      try {
-        headingSubscription = await Location.watchHeadingAsync(
-          (nextHeading) => {
-            const selectedHeading =
-              nextHeading.trueHeading >= 0 ? nextHeading.trueHeading : nextHeading.magHeading;
-            setHeading(Number.isFinite(selectedHeading) ? selectedHeading : null);
-          },
-          () => setHeading(null),
-        );
-      } catch {
-        setHeading(null);
+      if (Platform.OS !== "web") {
+        try {
+          headingSubscription = await Location.watchHeadingAsync(
+            (nextHeading) => {
+              const selectedHeading =
+                nextHeading.trueHeading >= 0
+                  ? nextHeading.trueHeading
+                  : nextHeading.magHeading;
+              setHeading(Number.isFinite(selectedHeading) ? selectedHeading : null);
+            },
+            () => setHeading(null),
+          );
+        } catch {
+          setHeading(null);
+        }
       }
 
       if (cancelled) {
-        nativeLocationSubscription?.remove();
+        locationSubscription?.remove();
         headingSubscription?.remove();
       }
     }
 
-    function subscribeWeb() {
-      const currentOptions: PositionOptions = {
-        enableHighAccuracy: true,
-        maximumAge: 0,
-        timeout: GPS_TIMEOUT_MS,
-      };
-      const watchOptions: PositionOptions = {
-        enableHighAccuracy: true,
-        maximumAge: 3_000,
-        timeout: GPS_TIMEOUT_MS,
-      };
-
-      navigator.geolocation.getCurrentPosition(
-        (nextPosition) => acceptPosition(browserPositionToExpo(nextPosition)),
-        reportBrowserError,
-        currentOptions,
-      );
-
-      browserWatchId = navigator.geolocation.watchPosition(
-        (nextPosition) => acceptPosition(browserPositionToExpo(nextPosition)),
-        reportBrowserError,
-        watchOptions,
-      );
-    }
-
-    if (Platform.OS === "web") {
-      subscribeWeb();
-    } else {
-      subscribeNative().catch(reportNativeError);
-    }
+    subscribe().catch(reportLocationError);
 
     return () => {
       cancelled = true;
       clearTimeout(timeout);
-      nativeLocationSubscription?.remove();
+      locationSubscription?.remove();
       headingSubscription?.remove();
-      if (browserWatchId !== null && typeof navigator !== "undefined") {
-        navigator.geolocation.clearWatch(browserWatchId);
-      }
     };
   }, [locationAttempt, permissionState]);
 
