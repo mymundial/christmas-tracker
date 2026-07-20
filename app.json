@@ -1,0 +1,48 @@
+{
+  "expo": {
+    "name": "CHRISTMAS TRACKER",
+    "slug": "christmas-tracker",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "scheme": "christmas-tracker",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#03110D"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.adi.christmastracker",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "CHRISTMAS TRACKER uses your precise location while the app is open to unlock checkpoints on the outdoor circuit."
+      }
+    },
+    "android": {
+      "package": "com.adi.christmastracker",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#03110D"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow CHRISTMAS TRACKER to use your precise location while you complete the outdoor circuit."
+        }
+      ]
+    ]
+  }
+}
